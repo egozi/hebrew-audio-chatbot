@@ -110,12 +110,15 @@ create_service_account() {
     # Speech-to-Text roles
     gcloud projects add-iam-policy-binding $PROJECT_ID \
         --member="serviceAccount:$SA_EMAIL" \
-        --role="roles/speech.client" || echo "Warning: Could not assign Speech Client role"
+        --role="roles/speech.admin" || echo "Warning: Could not assign Speech Administrator role"
     
-    # Text-to-Speech roles
+    # Add Editor role for broader access including Text-to-Speech
     gcloud projects add-iam-policy-binding $PROJECT_ID \
         --member="serviceAccount:$SA_EMAIL" \
-        --role="roles/texttospeech.reader" || echo "Warning: Could not assign Text-to-Speech Reader role"
+        --role="roles/editor" || echo "Warning: Could not assign Editor role"
+    
+    echo "Note: Using Editor role which includes Text-to-Speech permissions."
+    echo "For more restricted permissions, consider creating a custom role in the Google Cloud Console."
     
     # Create and download key
     echo "Creating service account key..."

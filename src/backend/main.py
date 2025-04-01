@@ -8,9 +8,9 @@ import uvicorn
 from dotenv import load_dotenv
 
 # Import our API modules
-from api.speech_to_text import SpeechToTextService
-from api.llm import LLMService
-from api.text_to_speech import TextToSpeechService
+from .api.speech_to_text import SpeechToTextService
+from .api.llm import LLMService
+from .api.text_to_speech import TextToSpeechService
 
 # Load environment variables from .env file
 load_dotenv()
@@ -96,4 +96,5 @@ async def health_check():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     logger.info(f"Starting server on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # Note: When running with `python -m src.backend.main`, uvicorn needs the path relative to the execution directory.
+    uvicorn.run("src.backend.main:app", host="0.0.0.0", port=port, reload=True)

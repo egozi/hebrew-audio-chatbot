@@ -37,7 +37,9 @@ To run this application, you need:
 - Python 3.8 or higher
 - Node.js and npm (for local development)
 - Google Cloud Platform account with Speech-to-Text and Text-to-Speech APIs enabled
+  - See [GOOGLE_CREDENTIALS_GUIDE.md](GOOGLE_CREDENTIALS_GUIDE.md) for detailed instructions
 - OpenAI API key
+  - See [OPENAI_API_GUIDE.md](OPENAI_API_GUIDE.md) for detailed instructions
 - Docker (for containerization and deployment)
 
 ## Local Development Setup
@@ -68,13 +70,7 @@ pip install -r requirements.txt
 cp config/.env.example .env
 ```
 
-Edit the `.env` file to add your API keys and Google Cloud credentials:
-
-```
-GOOGLE_APPLICATION_CREDENTIALS="path/to/your-service-account-key.json"
-GCP_PROJECT_ID="your-gcp-project-id"
-OPENAI_API_KEY="your-openai-api-key"
-```
+Edit the `.env` file to add your API keys and Google Cloud credentials. See [LOCAL_ENV_SETUP.md](LOCAL_ENV_SETUP.md) for detailed instructions on configuring your environment variables.
 
 5. **Run the application locally**
 
