@@ -1,0 +1,18 @@
+# Web framework and servers
+fastapi>=0.68.0
+uvicorn>=0.15.0
+websockets>=10.0
+python-multipart>=0.0.5
+
+# Cloud services & API clients
+google-cloud-speech>=2.13.1
+google-cloud-texttospeech>=2.11.1
+openai>=1.0.0
+
+# Audio processing
+pydub>=0.25.1
+soundfile>=0.10.3
+
+# Utilities
+python-dotenv>=0.19.1
+pydantic>=1.8.2

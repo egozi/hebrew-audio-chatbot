@@ -1,0 +1,303 @@
+/* General Styles */
+:root {
+    --primary-color: #4a89dc;
+    --secondary-color: #5d9cec;
+    --background-color: #f5f7fa;
+    --text-color: #333;
+    --light-text: #888;
+    --border-color: #e6e9ed;
+    --success-color: #8cc152;
+    --error-color: #da4453;
+    --shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, 'Helvetica Neue', sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+    line-height: 1.6;
+    direction: rtl;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+header h1 {
+    color: var(--primary-color);
+    margin-bottom: 10px;
+}
+
+header p {
+    color: var(--light-text);
+}
+
+/* Main Content */
+main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-container {
+    flex: 1;
+    background: white;
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.message {
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+}
+
+.message.user {
+    align-items: flex-start;
+}
+
+.message.bot {
+    align-items: flex-end;
+}
+
+.message.system {
+    align-items: center;
+}
+
+.message-content {
+    padding: 10px 15px;
+    border-radius: 18px;
+    max-width: 80%;
+    word-wrap: break-word;
+}
+
+.message.user .message-content {
+    background-color: var(--primary-color);
+    color: white;
+    border-bottom-right-radius: 5px;
+}
+
+.message.bot .message-content {
+    background-color: #e9ebf0;
+    color: var(--text-color);
+    border-bottom-left-radius: 5px;
+}
+
+.message.system .message-content {
+    background-color: #f6f7f8;
+    color: var(--light-text);
+    border-radius: 10px;
+    text-align: center;
+}
+
+/* Controls */
+.controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    margin-bottom: 20px;
+}
+
+.record-button-container {
+    margin-bottom: 10px;
+}
+
+.record-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: white;
+    border: none;
+    border-radius: 50px;
+    padding: 15px 30px;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    transition: all 0.3s ease;
+}
+
+.record-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+}
+
+.record-button:active, .record-button.recording {
+    background-color: var(--error-color);
+    color: white;
+    transform: translateY(1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.record-button.listening {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.record-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: var(--error-color);
+    margin-left: 10px;
+}
+
+.record-button.recording .record-icon, .record-button.listening .record-icon {
+    background-color: white;
+}
+
+.record-text {
+    font-weight: 500;
+}
+
+.status {
+    color: var(--light-text);
+    font-size: 14px;
+    text-align: center;
+}
+
+/* Visualization */
+.visualization {
+    height: 80px;
+    margin-bottom: 20px;
+}
+
+.visualizer {
+    width: 100%;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.5);
+    border-radius: 10px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 20px 0;
+    color: var(--light-text);
+    font-size: 14px;
+}
+
+/* Error Modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.modal.show {
+    display: flex;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    width: 90%;
+    max-width: 500px;
+    text-align: center;
+}
+
+.close-button {
+    float: left;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--light-text);
+}
+
+.modal h2 {
+    margin-bottom: 10px;
+    color: var(--error-color);
+}
+
+.modal p {
+    margin-bottom: 20px;
+}
+
+#retryButton {
+    padding: 10px 20px;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#retryButton:hover {
+    background-color: var(--secondary-color);
+}
+
+/* Responsive Design */
+@media (max-width: 600px) {
+    .container {
+        padding: 10px;
+    }
+    
+    .message-content {
+        max-width: 90%;
+    }
+}
+
+/* Animation for recording state */
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.record-button.recording {
+    animation: pulse 1.5s infinite;
+}
+
+/* Animation for waiting/processing state */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.status.processing::after {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--light-text);
+    border-top-color: transparent;
+    border-radius: 50%;
+    margin-right: 5px;
+    animation: spin 1s linear infinite;
+}
