@@ -16,3 +16,7 @@ soundfile>=0.10.3
 # Utilities
 python-dotenv>=0.19.1
 pydantic>=1.8.2
+
+# LangChain for Memory
+langchain>=0.1.0
+langchain-openai>=0.1.0

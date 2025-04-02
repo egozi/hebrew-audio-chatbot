@@ -40,10 +40,17 @@ class SpeechToTextService:
             if audio.frame_rate != 16000:
                 audio = audio.set_frame_rate(16000)  # Convert to 16kHz
             
-            # Export as WAV in memory
+            # Export as WAV in memory, explicitly setting 16-bit sample width (2 bytes)
             buf = io.BytesIO()
-            audio.export(buf, format="wav")
+            # The 'sample_width' parameter is often controlled via codec settings or might not be directly exposed.
+            # A common way is to ensure the AudioSegment itself is 16-bit before export,
+            # or specify parameters during export if the format supports it.
+            # Let's ensure the AudioSegment's sample_width is 2 before exporting.
+            audio = audio.set_sample_width(2) # Set sample width to 16-bit
+            
+            audio.export(buf, format="wav") # Export the 16-bit audio
             content = buf.getvalue()
+            logger.debug(f"Exported WAV content size: {len(content)} bytes, Sample Width: {audio.sample_width}")
             
             # Configure request
             config = speech.RecognitionConfig(

@@ -2,32 +2,36 @@
  * Main JavaScript for Hebrew Audio Chatbot
  * 
  * This module initializes and manages the audio chatbot functionality, including:
- * - Microphone access and audio recording
- * - Voice activity detection
- * - WebSocket communication with the backend
+ * - Microphone access and audio recording (collecting chunks)
+ * - Single button Start/Stop/Send interaction
+ * - WebSocket communication with the backend (sending single audio blob)
  * - UI interactions and visualization
  */
 
 // Application state
 const state = {
-    isRecording: false,      // Is the user currently holding the record button
+    isRecording: false,      // Is the user currently recording
     isProcessing: false,     // Is the server currently processing our request
     isConnected: false,      // Is the WebSocket connected
     audioContext: null,      // Web Audio API context
     mediaStream: null,       // Microphone stream
-    processor: null,         // Audio processor node
-    recorder: null,          // MediaRecorder for capturing audio
+    processor: null,         // Audio processor node (ScriptProcessorNode for simplicity now)
+    recorder: null,          // Using MediaRecorder again for blob creation
     socket: null,            // WebSocket connection
-    vad: null,               // Voice Activity Detector
+    vad: null,               // Voice Activity Detector (basic integration)
     visualizer: null,        // Audio visualizer
-    chunks: [],              // Audio chunks for recording
+    audioChunks: [],         // Store audio chunks for blob creation
     retryCount: 0,           // Connection retry counter
-    maxRetries: 3            // Maximum connection retry attempts
+    maxRetries: 3,           // Maximum connection retry attempts
+    userMessageElement: null,// Reference to the current user message element for updates
+    botMessageElement: null, // Reference to the current bot message element for updates
+    visualizerUpdater: null  // Holds the requestAnimationFrame ID for the visualizer
 };
 
 // DOM elements
 const elements = {
     recordButton: document.getElementById('recordButton'),
+    // sendButton: document.getElementById('sendButton'), // Removed
     statusText: document.getElementById('status'),
     chatMessages: document.getElementById('chat-messages'),
     visualizerCanvas: document.getElementById('visualizer'),
@@ -40,16 +44,16 @@ const elements = {
 // Configuration
 const config = {
     websocketUrl: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/audio`,
-    vadOptions: {
-        silenceThreshold: 1500,   // 1.5 seconds of silence to end speech
-        minSpeechTime: 300,       // Minimum 300ms of speech to consider it valid
-        energyThreshold: 0.015,   // Lower means more sensitive detection
-        energySmoothing: 0.8      // How much to smooth the energy detection
+    vadOptions: { 
+        silenceThreshold: 2000,   
+        minSpeechTime: 300,       
+        energyThreshold: 0.015,   
+        energySmoothing: 0.8      
     },
     audio: {
-        sampleRate: 16000,        // 16kHz sample rate for optimal STT
-        channels: 1,              // Mono audio
-        mimeType: 'audio/webm'    // Audio format
+        sampleRate: 16000, // Target sample rate
+        channels: 1,       // Mono audio
+        mimeType: 'audio/webm;codecs=opus', 
     }
 };
 
@@ -57,37 +61,22 @@ const config = {
  * Initializes the application
  */
 function init() {
-    // Set up audio visualizer
     state.visualizer = new AudioVisualizer(elements.visualizerCanvas);
-    
-    // Set up UI event listeners
     setupEventListeners();
-    
-    // Initialize Voice Activity Detection
-    initVAD();
-    
-    // Connect to WebSocket when the page is loaded
+    initVAD(); 
     connectWebSocket();
-    
-    // Handle window resize for visualizer
     window.addEventListener('resize', () => {
-        if (state.visualizer) {
-            state.visualizer.resize();
-        }
+        if (state.visualizer) state.visualizer.resize();
     });
+    updateUIState('initial'); 
 }
 
 /**
  * Sets up event listeners for UI elements
  */
 function setupEventListeners() {
-    // Record button - Push to talk
-    elements.recordButton.addEventListener('mousedown', startRecording);
-    elements.recordButton.addEventListener('touchstart', startRecording);
-    
-    elements.recordButton.addEventListener('mouseup', stopRecording);
-    elements.recordButton.addEventListener('touchend', stopRecording);
-    elements.recordButton.addEventListener('mouseleave', stopRecording);
+    // Record button - Toggle recording & send on stop
+    elements.recordButton.addEventListener('click', toggleRecording); 
     
     // Error modal retry button
     elements.retryButton.addEventListener('click', () => {
@@ -100,35 +89,18 @@ function setupEventListeners() {
 }
 
 /**
- * Initializes the Voice Activity Detector
+ * Initializes the Voice Activity Detector (basic setup)
  */
 function initVAD() {
     state.vad = new VoiceActivityDetector({
         ...config.vadOptions,
-        onSpeechStart: () => {
-            console.log('Speech started');
-            updateUIState('listening');
-        },
+        onSpeechStart: () => console.log('VAD: Speech started'),
         onSpeechEnd: () => {
-            console.log('Speech ended');
-            if (state.isRecording) {
-                stopRecording();
-            }
-        },
-        onProcess: (vadData) => {
-            // Update the visualizer with VAD data if we're recording
-            if (state.isRecording && state.processor) {
-                // We don't have actual audio data here, but we can use the energy level
-                const dummyData = new Float32Array(state.visualizer.barCount);
-                for (let i = 0; i < dummyData.length; i++) {
-                    dummyData[i] = vadData.energy * (0.5 + 0.5 * Math.random());
-                }
-                
-                state.visualizer.update(dummyData, {
-                    isSpeaking: vadData.isSpeaking,
-                    isProcessing: state.isProcessing
-                });
-            }
+             console.log('VAD: Speech ended');
+             // Optional: Could automatically stop recording here if desired
+             // if (state.isRecording) {
+             //     toggleRecording(); 
+             // }
         }
     });
 }
@@ -139,16 +111,11 @@ function initVAD() {
 function connectWebSocket() {
     try {
         updateUIState('connecting');
+        if (state.socket) state.socket.close();
         
-        // Close existing connection if any
-        if (state.socket) {
-            state.socket.close();
-        }
-        
-        // Create new WebSocket connection
         state.socket = new WebSocket(config.websocketUrl);
-        
-        // WebSocket event handlers
+        state.socket.binaryType = 'arraybuffer'; 
+
         state.socket.onopen = () => {
             state.isConnected = true;
             state.retryCount = 0;
@@ -159,260 +126,361 @@ function connectWebSocket() {
         state.socket.onclose = (event) => {
             state.isConnected = false;
             console.log('WebSocket disconnected', event);
+            if (state.isRecording) stopRecordingInternal(false); 
             
-            // Try to reconnect if the connection was lost unexpectedly
             if (!event.wasClean && state.retryCount < state.maxRetries) {
                 state.retryCount++;
-                const delay = state.retryCount * 1000; // Increasing backoff
-                console.log(`Reconnecting in ${delay}ms (attempt ${state.retryCount}/${state.maxRetries})...`);
-                
+                const delay = state.retryCount * 1000;
+                console.log(`Reconnecting in ${delay}ms...`);
                 setTimeout(connectWebSocket, delay);
             } else if (state.retryCount >= state.maxRetries) {
                 showError('התנתקנו מהשרת. נא לרענן את הדף כדי לנסות שוב.');
+                updateUIState('error');
+            } else {
+                 updateUIState('disconnected');
             }
         };
         
         state.socket.onerror = (error) => {
             console.error('WebSocket error:', error);
-            if (!state.isConnected) {
-                showError('לא ניתן להתחבר לשרת. אנא וודא שהשרת פועל ונסה שוב.');
-            }
+            if (!state.isConnected) showError('לא ניתן להתחבר לשרת.');
+            if (state.isRecording) stopRecordingInternal(false);
+            updateUIState('error');
         };
         
         state.socket.onmessage = handleServerMessage;
         
     } catch (error) {
         console.error('Error connecting to WebSocket:', error);
-        showError('אירעה שגיאה בהתחברות לשרת. אנא נסה שוב מאוחר יותר.');
+        showError('אירעה שגיאה בהתחברות לשרת.');
+        updateUIState('error');
     }
 }
 
 /**
- * Starts recording audio from the microphone
+ * Toggles audio recording state and triggers send on stop
  */
-async function startRecording(event) {
-    // Prevent default behavior for touch events
-    if (event.type === 'touchstart') {
-        event.preventDefault();
+async function toggleRecording() {
+    if (state.isProcessing) return; 
+
+    if (state.isRecording) {
+        // Stop recording AND trigger send
+        await stopRecordingInternal(true); 
+        // UI state will be updated to 'sending' within stopRecordingInternal/onstop
+    } else {
+        // Start recording
+        await startRecordingInternal();
     }
-    
-    // Don't start recording if we're already recording or processing
-    if (state.isRecording || state.isProcessing) {
+}
+
+// Removed sendRecording function as logic is merged into toggleRecording
+
+/**
+ * Internal function to start recording audio using MediaRecorder
+ */
+async function startRecordingInternal() {
+    if (!state.isConnected || state.socket.readyState !== WebSocket.OPEN) {
+        showError('אין חיבור לשרת.');
         return;
     }
     
-    // Check WebSocket connection
-    if (!state.isConnected) {
-        showError('אין חיבור לשרת. אנא המתן לחיבור מחדש או רענן את הדף.');
-        return;
-    }
+    state.isRecording = true;
+    updateUIState('recording');
+    state.audioChunks = []; // Clear previous chunks
     
     try {
-        // Request microphone access if we don't have it yet
-        if (!state.mediaStream) {
-            state.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: config.audio.channels,
-                    sampleRate: config.audio.sampleRate,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
+        // Setup AudioContext and MediaStream if needed
+        if (!state.mediaStream || !state.audioContext || state.audioContext.state === 'closed') {
+            console.log("Setting up AudioContext and MediaStream...");
+            state.mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: { 
+                    sampleRate: config.audio.sampleRate, 
+                    channelCount: config.audio.channels, 
+                    echoCancellation: true, 
+                    noiseSuppression: true, 
+                    autoGainControl: true 
+                } 
             });
             
-            // Initialize audio context with the obtained media stream
-            state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Create source node from the media stream
+            if (state.audioContext && state.audioContext.state !== 'closed') await state.audioContext.close();
+            state.audioContext = new (window.AudioContext || window.webkitAudioContext)(); 
+            console.log(`AudioContext running at: ${state.audioContext.sampleRate}Hz`);
+
             const source = state.audioContext.createMediaStreamSource(state.mediaStream);
-            
-            // Create processor node for real-time processing (for VAD and visualization)
-            state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
-            
-            // Connect the nodes
-            source.connect(state.processor);
-            state.processor.connect(state.audioContext.destination);
-            
-            // Process audio data for VAD and visualization
+            const bufferSize = 4096; 
+            state.processor = state.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
             state.processor.onaudioprocess = (e) => {
-                const audioData = e.inputBuffer.getChannelData(0);
-                
-                // Use the VAD to process audio
-                if (state.vad) {
-                    state.vad.processAudio(audioData, state.audioContext.sampleRate);
+                const inputData = e.inputBuffer.getChannelData(0);
+                if (state.vad && state.isRecording) {
+                    state.vad.processAudio(inputData, state.audioContext.sampleRate);
                 }
-                
-                // Update the visualizer
-                if (state.visualizer) {
-                    state.visualizer.update(audioData, {
-                        isSpeaking: state.vad ? state.vad.speaking : true,
-                        isProcessing: state.isProcessing
-                    });
+                if (state.visualizer && state.isRecording) {
+                     state.visualizer.update(inputData, { isSpeaking: state.isRecording, isProcessing: state.isProcessing });
                 }
             };
+            
+            source.connect(state.processor);
+            state.processor.connect(state.audioContext.destination); 
+
+            console.log("Audio setup complete.");
+        } else {
+             console.log("Reusing AudioContext/MediaStream.");
+             if (state.audioContext.state === 'suspended') await state.audioContext.resume();
         }
-        
-        // Create a MediaRecorder to record the audio for sending to the server
-        state.recorder = new MediaRecorder(state.mediaStream, {
-            mimeType: config.audio.mimeType
-        });
-        
-        // Clear previous audio chunks
-        state.chunks = [];
-        
-        // Handle recorded data
-        state.recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) {
-                state.chunks.push(e.data);
+
+        // --- MediaRecorder Setup ---
+        console.log(`Attempting to create MediaRecorder with mimeType: ${config.audio.mimeType}`);
+        try {
+             state.recorder = new MediaRecorder(state.mediaStream, { mimeType: config.audio.mimeType });
+        } catch (e) {
+             console.warn(`Failed to create MediaRecorder with ${config.audio.mimeType}, trying default:`, e);
+             try {
+                 state.recorder = new MediaRecorder(state.mediaStream); 
+                 console.log(`Using default MediaRecorder mimeType: ${state.recorder.mimeType}`);
+             } catch (e2) {
+                 console.error("Failed to create MediaRecorder with any mimeType:", e2);
+                 showError("שגיאה בהגדרת מקליט האודיו בדפדפן.");
+                 await cleanupAudioResources();
+                 updateUIState('ready');
+                 return;
+             }
+        }
+
+        state.recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                state.audioChunks.push(event.data);
             }
         };
+
+        state.recorder.onstop = async () => {
+             console.log("MediaRecorder stopped.");
+             if (state.audioChunks.length === 0) {
+                 console.log("No audio chunks recorded.");
+                 // Don't add user message if nothing was recorded
+                 // updateUserMessage(state.userMessageElement, '🎤 לא הוקלט שמע.'); 
+                 state.userMessageElement = null; // Clear placeholder if it exists
+                 updateUIState('ready'); 
+                 return;
+             }
+
+             const audioBlob = new Blob(state.audioChunks, { type: state.recorder.mimeType });
+             console.log(`Created blob of type ${audioBlob.type}, size ${audioBlob.size}`);
+             
+             if (state.isConnected && state.socket.readyState === WebSocket.OPEN) {
+                 try {
+                     updateUIState('sending'); // Indicate sending NOW
+                     if (state.userMessageElement) { // Update placeholder message
+                          updateUserMessage(state.userMessageElement, '🎤 שולח הקלטה...');
+                     } else { // Add message if none existed
+                          state.userMessageElement = addUserMessage('🎤 שולח הקלטה...');
+                     }
+                     const arrayBuffer = await audioBlob.arrayBuffer();
+                     console.log(`Sending audio blob as ArrayBuffer: ${arrayBuffer.byteLength} bytes`);
+                     state.socket.send(arrayBuffer);
+                 } catch (sendError) {
+                      console.error("Error sending audio blob:", sendError);
+                      showError("שגיאה בשליחת ההקלטה.");
+                      updateUIState('ready');
+                 }
+             } else {
+                 console.error("WebSocket not open when trying to send blob.");
+                 showError("שגיאה בשליחת ההקלטה (אין חיבור).");
+                 updateUIState('ready');
+             }
+        };
+
+        state.recorder.start(100); // Start recording, collect chunks frequently for responsiveness
+        console.log("MediaRecorder started.");
         
-        // Start recording
-        state.recorder.start();
-        state.isRecording = true;
-        
-        // Reset VAD state
-        if (state.vad) {
-            state.vad.reset();
-        }
-        
-        updateUIState('recording');
+        state.userMessageElement = addUserMessage('🎤 מקליט...'); 
+        if (state.vad) state.vad.reset(); 
         
     } catch (error) {
         console.error('Error starting recording:', error);
-        
-        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-            showError('נדרשת גישה למיקרופון. אנא אפשר גישה למיקרופון בדפדפן שלך.');
-        } else {
-            showError('אירעה שגיאה בהפעלת ההקלטה. אנא נסה שוב מאוחר יותר.');
-        }
-    }
-}
-
-/**
- * Stops recording and sends the audio to the server
- */
-function stopRecording(event) {
-    // Prevent default behavior for touch events
-    if (event && event.type === 'touchend') {
-        event.preventDefault();
-    }
-    
-    // Only stop if we're actually recording
-    if (!state.isRecording || !state.recorder) {
-        return;
-    }
-    
-    try {
-        // Stop the recorder
-        state.recorder.stop();
         state.isRecording = false;
-        
-        updateUIState('processing');
-        
-        // When recording is complete, send data to server
-        state.recorder.onstop = () => {
-            if (state.chunks.length > 0) {
-                // Create a blob from the audio chunks
-                const audioBlob = new Blob(state.chunks, { type: config.audio.mimeType });
-                
-                // Only send if the duration is reasonable (not just a tap)
-                if (audioBlob.size > 1000) {  // Arbitrary threshold, adjust as needed
-                    sendAudioToServer(audioBlob);
-                } else {
-                    // Too short, just go back to ready state
-                    updateUIState('ready');
-                }
-            } else {
-                updateUIState('ready');
-            }
-        };
-        
-    } catch (error) {
-        console.error('Error stopping recording:', error);
+        showError(error.name === 'NotAllowedError' ? 'נדרשת גישה למיקרופון.' : 'שגיאה בהפעלת הקלטה.');
+        await cleanupAudioResources();
         updateUIState('ready');
     }
 }
 
 /**
- * Sends recorded audio to the server via WebSocket
+ * Internal function to stop recording and optionally trigger sending via recorder.stop()
+ * @param {boolean} triggerSend - If true, stops the MediaRecorder which triggers the onstop handler to send.
  */
-async function sendAudioToServer(audioBlob) {
-    if (!state.isConnected) {
-        showError('אין חיבור לשרת. אנא נסה שוב מאוחר יותר.');
-        updateUIState('ready');
-        return;
-    }
+async function stopRecordingInternal(triggerSend = true) { 
+    if (!state.isRecording) return; 
+
+    console.log(`Stopping recording... Trigger Send: ${triggerSend}`);
+    state.isRecording = false; // Set state immediately
+    
+    if (state.visualizerUpdater) cancelAnimationFrame(state.visualizerUpdater);
+    state.visualizerUpdater = null;
+    if (state.visualizer) state.visualizer.setIdle();
     
     try {
-        state.isProcessing = true;
+        // Stop the MediaRecorder if it's running. This triggers 'onstop' which handles sending if triggerSend is true.
+        if (state.recorder && state.recorder.state === "recording") {
+            state.recorder.stop(); 
+        } else {
+             console.log("Recorder not active or already stopped.");
+             // If not triggering send, just update UI
+             if (!triggerSend) {
+                  updateUIState('ready'); // Or a specific 'stopped' state if needed
+                  if (state.userMessageElement) {
+                       updateUserMessage(state.userMessageElement, state.userMessageElement.textContent.replace('מקליט...', 'הקלטה נעצרה.'));
+                  }
+             }
+        }
         
-        // Add a user message to the chat
-        addUserMessage('🎤 הקלטה נשלחה...');
+        // UI update for 'sending' is handled within the recorder.onstop handler
+        // UI update for just stopping locally happens above if recorder wasn't running
         
-        // Send the audio blob to the server
-        state.socket.send(await audioBlob.arrayBuffer());
     } catch (error) {
-        console.error('Error sending audio to server:', error);
-        showError('אירעה שגיאה בשליחת ההקלטה לשרת. אנא נסה שוב.');
-        state.isProcessing = false;
-        updateUIState('ready');
-    }
+        console.error('Error stopping MediaRecorder:', error);
+        updateUIState('ready'); // Revert to ready on error
+    } 
 }
 
 /**
- * Handles messages received from the server
+ * Handles messages received from the server (JSON or ArrayBuffer)
  */
 function handleServerMessage(event) {
-    try {
-        // Check if the message is a JSON response (error or status)
-        if (typeof event.data === 'string') {
-            const data = JSON.parse(event.data);
-            
-            if (data.status === 'error') {
-                console.error('Server error:', data.message);
-                showError(`שגיאת שרת: ${data.message}`);
-                state.isProcessing = false;
-                updateUIState('ready');
-                return;
+    // Check if it's binary audio data first
+    if (event.data instanceof ArrayBuffer) {
+        console.log(`Received audio data: ${event.data.byteLength} bytes`);
+        if (event.data.byteLength > 0) {
+            playAudio(event.data); // Play the bot's audio response
+        } else {
+            console.log("Received empty audio buffer.");
+             if (state.isProcessing) {
+                 // state.isProcessing = false; // Handled in playAudio.onended
+                 // updateUIState('ready'); // Handled in playAudio.onended
+             }
+        }
+    } 
+    // Then check if it's a string (likely JSON)
+    else if (typeof event.data === 'string') {
+        try {
+            const message = JSON.parse(event.data);
+            console.log("Received JSON:", message);
+            switch (message.type || message.status) { // Handle both message structures
+                case 'transcript': // Assuming backend sends this structure now
+                    handleTranscript(message.text); 
+                    break;
+                case 'error': // Handle errors from backend
+                    console.error('Server error:', message.message);
+                    showError(`שגיאת שרת: ${message.message}`);
+                    state.isProcessing = false;
+                    updateUIState('ready');
+                    state.userMessageElement = null;
+                    state.botMessageElement = null;
+                    break;
+                default:
+                    console.warn('Unknown JSON message type:', message);
             }
+        } catch (error) {
+            console.error('Error parsing JSON or unknown string message:', error, event.data);
+             if (state.isProcessing || state.isRecording) {
+                 state.isProcessing = false;
+                 state.isRecording = false;
+                 updateUIState('ready');
+                 showError("שגיאה בתקשורת עם השרת.");
+             }
+        }
+    } 
+    else {
+        console.warn('Received unknown message type:', typeof event.data, event.data);
+    }
+}
+
+/**
+ * Handles incoming transcript messages 
+ */
+function handleTranscript(text) { 
+    if (!state.userMessageElement) {
+        state.userMessageElement = addUserMessage('');
+    }
+    let displayText = state.userMessageElement.textContent.replace(' (שולח...)', '');
+    displayText = displayText.replace('🎤 שולח הקלטה...', ''); 
+    updateUserMessage(state.userMessageElement, `🎤 ${text || 'לא זוהה דיבור.'}`); 
+    
+    // Assume transcript means STT is done. Wait for audio response.
+    state.isProcessing = true; 
+    updateUIState('processing'); 
+}
+
+/**
+ * Handles incoming LLM text response messages (If backend sends them separately)
+ */
+// function handleLlmResponse(text) { ... } // Can be removed if LLM text isn't sent separately
+
+/**
+ * Plays the received audio data (TTS response)
+ */
+function playAudio(audioData) {
+    try {
+        const audioBlob = new Blob([audioData], { type: 'audio/wav' }); 
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        
+        // Add bot message placeholder if it doesn't exist
+        // We assume the bot message contains the LLM text already if backend sends it before audio
+        if (!state.botMessageElement) { 
+             state.botMessageElement = addBotMessage('🔊 המערכת עונה...');
+        } else {
+             if (!state.botMessageElement.textContent.includes('🔊')) {
+                 updateBotMessage(state.botMessageElement, state.botMessageElement.textContent + ' 🔊');
+             }
         }
         
-        // Handle binary response (audio data)
-        if (event.data instanceof Blob) {
-            // Play the received audio
-            const audioUrl = URL.createObjectURL(event.data);
-            const audio = new Audio(audioUrl);
-            
-            audio.oncanplaythrough = () => {
-                // Add a bot message once audio starts playing
-                addBotMessage('🔊 המערכת עונה בקול...');
-            };
-            
-            audio.onended = () => {
-                // Clean up the object URL
-                URL.revokeObjectURL(audioUrl);
-                
-                // Reset state after playback
-                state.isProcessing = false;
-                updateUIState('ready');
-            };
-            
-            // Play the audio
-            audio.play().catch(error => {
-                console.error('Error playing audio:', error);
-                state.isProcessing = false;
-                updateUIState('ready');
-                
-                if (error.name === 'NotAllowedError') {
-                    showError('הדפדפן מונע ניגון אוטומטי של אודיו. אנא אפשר ניגון אוטומטי או לחץ על הכפתור כדי להשמיע.');
-                }
-            });
-        }
+        audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            console.log("Audio playback finished.");
+            state.isProcessing = false; // Processing ends AFTER audio playback
+            updateUIState('ready');
+            // Clear messages for next turn after a delay
+            setTimeout(() => {
+                 // Check if elements still exist before nullifying
+                 if (state.userMessageElement && state.userMessageElement.parentNode) {
+                      state.userMessageElement.parentNode.removeChild(state.userMessageElement);
+                 }
+                 if (state.botMessageElement && state.botMessageElement.parentNode) {
+                      state.botMessageElement.parentNode.removeChild(state.botMessageElement);
+                 }
+                 state.userMessageElement = null; 
+                 state.botMessageElement = null;
+            }, 1500); // Delay before clearing messages
+        };
+        
+        audio.onerror = (e) => {
+             console.error('Error playing audio:', e);
+             URL.revokeObjectURL(audioUrl);
+             showError('אירעה שגיאה בניגון השמע.');
+             state.isProcessing = false;
+             updateUIState('ready');
+             state.userMessageElement = null;
+             state.botMessageElement = null;
+        };
+        
+        audio.play().catch(error => {
+            console.error('Error initiating audio playback:', error);
+            state.isProcessing = false;
+            updateUIState('ready');
+            state.userMessageElement = null;
+            state.botMessageElement = null;
+            if (error.name === 'NotAllowedError') {
+                showError('הדפדפן מונע ניגון אוטומטי של אודיו.');
+            }
+        });
+        
     } catch (error) {
-        console.error('Error handling server message:', error);
+        console.error('Error processing audio data:', error);
         state.isProcessing = false;
         updateUIState('ready');
+        state.userMessageElement = null;
+        state.botMessageElement = null;
     }
 }
 
@@ -420,88 +488,106 @@ function handleServerMessage(event) {
  * Updates the UI based on the current state
  */
 function updateUIState(newState) {
-    // Update record button
-    const button = elements.recordButton;
-    button.classList.remove('recording', 'listening');
-    
-    // Update status text
+    console.log("Updating UI State to:", newState);
+    const recordBtn = elements.recordButton;
+    // const sendBtn = elements.sendButton; // Removed
     const statusText = elements.statusText;
-    statusText.classList.remove('processing');
     
-    // Update visualizer
-    if (state.visualizer) {
-        state.visualizer.setIdle();
-    }
+    // Reset common states
+    recordBtn.classList.remove('recording');
+    recordBtn.disabled = false;
+    // sendBtn.disabled = true; // Removed
+    statusText.classList.remove('processing');
     
     // Set state-specific UI
     switch (newState) {
+        case 'initial': 
         case 'connecting':
             statusText.textContent = 'מתחבר לשרת...';
-            button.disabled = true;
+            recordBtn.disabled = true;
             break;
-            
+        case 'disconnected':
+             statusText.textContent = 'מנותק';
+             recordBtn.disabled = true;
+             break;
+        case 'error':
+             statusText.textContent = 'שגיאה';
+             recordBtn.disabled = true; 
+             break;
         case 'ready':
-            statusText.textContent = 'מוכן להקשיב';
-            button.disabled = false;
+            statusText.textContent = 'מוכן (לחץ להקלטה)';
+            recordBtn.querySelector('.record-text').textContent = 'התחל הקלטה';
+            recordBtn.classList.remove('recording');
             break;
-            
         case 'recording':
-            statusText.textContent = 'לחץ והחזק לדיבור';
-            button.classList.add('recording');
-            if (state.visualizer) {
-                state.visualizer.setRecording();
-            }
+            statusText.textContent = 'מקליט... (לחץ לעצירה ושליחה)';
+            recordBtn.querySelector('.record-text').textContent = 'עצור ושלח';
+            recordBtn.classList.add('recording');
             break;
-            
-        case 'listening':
-            statusText.textContent = 'מקשיב...';
-            button.classList.add('listening');
-            break;
-            
-        case 'processing':
+        // 'stopped' state removed as stop now triggers send
+        case 'sending': // Recording stopped, blob sent, waiting for server
+             statusText.textContent = 'שולח לשרת...';
+             recordBtn.disabled = true; // Disable while sending
+             recordBtn.querySelector('.record-text').textContent = 'שולח...';
+             recordBtn.classList.remove('recording');
+             break;
+        case 'processing': // Server is processing STT/LLM/TTS
             statusText.textContent = 'מעבד...';
             statusText.classList.add('processing');
-            button.disabled = true;
-            if (state.visualizer) {
-                state.visualizer.setProcessing();
-            }
+            recordBtn.disabled = true;
+            recordBtn.querySelector('.record-text').textContent = 'מעבד...';
             break;
     }
 }
 
 /**
- * Adds a user message to the chat
+ * Adds or updates a user message in the chat
  */
 function addUserMessage(text) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message user';
-    
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    contentDiv.textContent = text;
-    
+    contentDiv.textContent = text; 
     messageDiv.appendChild(contentDiv);
     elements.chatMessages.appendChild(messageDiv);
-    
-    // Scroll to bottom
-    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+    scrollToBottom();
+    return contentDiv; 
+}
+
+/** Updates the text content of an existing user message element */
+function updateUserMessage(element, text) {
+    if (element) {
+        element.textContent = text; 
+        scrollToBottom();
+    }
 }
 
 /**
- * Adds a bot message to the chat
+ * Adds or updates a bot message in the chat
  */
 function addBotMessage(text) {
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message bot';
-    
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    contentDiv.textContent = text;
-    
+    contentDiv.textContent = text; 
     messageDiv.appendChild(contentDiv);
     elements.chatMessages.appendChild(messageDiv);
-    
-    // Scroll to bottom
+    scrollToBottom();
+    return contentDiv; 
+}
+
+/** Updates the text content of an existing bot message element */
+function updateBotMessage(element, text) {
+    if (element) {
+        element.textContent = text; 
+        scrollToBottom();
+    }
+}
+
+/** Scrolls the chat messages container to the bottom */
+function scrollToBottom() {
     elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
@@ -520,5 +606,38 @@ function closeErrorModal() {
     elements.errorModal.classList.remove('show');
 }
 
+/**
+ * Cleans up audio resources like AudioContext and MediaStream.
+ */
+async function cleanupAudioResources() {
+    console.log("Cleaning up audio resources...");
+    // Stop MediaRecorder if it exists and is recording
+    if (state.recorder && state.recorder.state === "recording") {
+        try { state.recorder.stop(); } catch(e) {}
+    }
+    state.recorder = null; // Clear recorder reference
+
+    // Disconnect ScriptProcessorNode if it exists
+    if (state.processor) {
+        try { state.processor.disconnect(); } catch(e) {}
+        state.processor = null;
+    }
+    // Stop MediaStream tracks
+    if (state.mediaStream) {
+        state.mediaStream.getTracks().forEach(track => track.stop());
+        state.mediaStream = null;
+    }
+    // Close AudioContext
+    if (state.audioContext && state.audioContext.state !== 'closed') {
+         try { await state.audioContext.close(); } catch(e) {}
+        state.audioContext = null;
+    }
+    console.log("Audio resources cleaned up.");
+}
+
+
 // Initialize the app when the DOM is loaded
 document.addEventListener('DOMContentLoaded', init);
+
+// Optional: Clean up audio context on page unload
+window.addEventListener('beforeunload', cleanupAudioResources);
