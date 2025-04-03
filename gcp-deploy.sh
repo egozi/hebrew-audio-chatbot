@@ -4,8 +4,24 @@
 # Exit on error
 set -e
 
+# Extract OPENAI_API_KEY from .env file if it exists
+if [ -f .env ]; then
+    echo "Extracting OPENAI_API_KEY from .env file..."
+    # Use grep to find the line, cut to get the value after '=', and sed to remove potential quotes
+    OPENAI_API_KEY_VALUE=$(grep '^OPENAI_API_KEY=' .env | cut -d '=' -f 2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+    if [ -n "$OPENAI_API_KEY_VALUE" ]; then
+        export OPENAI_API_KEY="$OPENAI_API_KEY_VALUE"
+        echo "OPENAI_API_KEY extracted."
+    else
+        echo "Warning: OPENAI_API_KEY not found or empty in .env file."
+    fi
+else
+    echo "Warning: .env file not found. OPENAI_API_KEY cannot be extracted."
+fi
+
+
 # Configuration
-PROJECT_ID=""
+PROJECT_ID="hebrew-audio-chatbot"
 REGION="us-central1"  # Choose the region closest to your users (e.g., europe-west1 for Europe)
 SERVICE_NAME="hebrew-audio-chatbot"
 IMAGE_NAME="hebrew-audio-chatbot"
@@ -131,6 +147,28 @@ create_service_account() {
             --iam-account=$SA_EMAIL || error_exit "Failed to create service account key"
         echo "Service account key saved to $KEY_FILE"
     fi
+
+    # Store the key in Secret Manager
+    SA_KEY_SECRET_NAME="$SA_NAME-key-secret"
+    echo "Storing service account key in Secret Manager as $SA_KEY_SECRET_NAME..."
+    
+    if ! gcloud secrets describe $SA_KEY_SECRET_NAME &> /dev/null; then
+        echo "Creating secret $SA_KEY_SECRET_NAME..."
+        gcloud secrets create $SA_KEY_SECRET_NAME \
+            --replication-policy="automatic" \
+            --data-file="$KEY_FILE" || error_exit "Failed to create secret for SA key"
+    else
+        echo "Secret $SA_KEY_SECRET_NAME already exists. Adding new version..."
+        gcloud secrets versions add $SA_KEY_SECRET_NAME \
+            --data-file="$KEY_FILE" || error_exit "Failed to add new version to SA key secret"
+    fi
+
+    # Grant Cloud Run service account access to the SA key secret
+    echo "Granting service account $SA_EMAIL access to secret $SA_KEY_SECRET_NAME..."
+    gcloud secrets add-iam-policy-binding $SA_KEY_SECRET_NAME \
+        --member="serviceAccount:$SA_EMAIL" \
+        --role="roles/secretmanager.secretAccessor" || echo "Warning: Could not grant SA access to its key secret"
+
 }
 
 # Build and push Docker image
@@ -171,16 +209,13 @@ deploy_to_cloud_run() {
     
     # Get the image URL
     IMAGE_URL="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:latest"
-    
-    # Set OpenAI API key as a secret
-    echo -e "${YELLOW}Please enter your OpenAI API key for the application:${NC}"
-    read OPENAI_API_KEY
-    
+
+    # Check if OPENAI_API_KEY is set (should be sourced from .env)
     if [ -z "$OPENAI_API_KEY" ]; then
-        error_exit "OpenAI API key cannot be empty"
+        error_exit "OPENAI_API_KEY is not set in the environment or .env file. Please ensure it is defined."
     fi
-    
-    # Create a secret for the OpenAI API key if it doesn't exist
+
+    # Create or update the secret for the OpenAI API key
     SECRET_NAME="openai-api-key"
     
     if ! gcloud secrets describe $SECRET_NAME &> /dev/null; then
@@ -212,14 +247,12 @@ deploy_to_cloud_run() {
         --allow-unauthenticated \
         --service-account=$SA_EMAIL \
         --set-env-vars="GOOGLE_APPLICATION_CREDENTIALS=$KEY_FILE_PATH" \
-        --set-secrets="OPENAI_API_KEY=$SECRET_NAME:latest" \
+        --set-secrets="OPENAI_API_KEY=$SECRET_NAME:latest,$KEY_FILE_PATH=$SA_KEY_SECRET_NAME:latest" \
         --cpu=1 \
         --memory=512Mi \
         --concurrency=80 \
-        --timeout=300 \
-        --mount="type=volume,source=sa-key,target=/secrets/sa-key,readOnly=true" \
-        --set-volume-secrets="sa-key=$SA_NAME-key=$SA_NAME-key.json" || error_exit "Deployment failed"
-    
+        --timeout=300 || error_exit "Deployment failed"
+
     # Get the service URL
     SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')
     
