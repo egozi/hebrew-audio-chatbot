@@ -22,6 +22,7 @@ logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+# this is the logger
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
