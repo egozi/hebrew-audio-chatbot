@@ -20,3 +20,4 @@ pydantic>=1.8.2
 # LangChain for Memory
 langchain>=0.1.0
 langchain-openai>=0.1.0
+torch
